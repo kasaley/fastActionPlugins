@@ -1,0 +1,93 @@
+{
+  "id": "com.fastaction.jira",
+  "name": "Jira",
+  "caption": "JIRA",
+  "icon": "checklist",
+  "summary": "Задачи Jira по вашим фильтрам: статус и приоритет в строке, описание и комментарии в панели, центр уведомлений, переход в браузер и копирование номера или ссылки.",
+  "version": "1.4.0",
+  "author": "FastAction",
+  "apiVersion": 1,
+  "entry": "plugin.js",
+  "permissions": {
+    "network": [
+      "$setting:site"
+    ],
+    "secrets": true,
+    "clipboard": true,
+    "notifications": true,
+    "openURL": true
+  },
+  "settings": [
+    {
+      "key": "site",
+      "type": "host",
+      "title": "Адрес Jira",
+      "placeholder": "company.atlassian.net",
+      "help": "Подставляется сам, если вставить ссылку на Jira во вкладке плагина"
+    },
+    {
+      "key": "auth",
+      "type": "select",
+      "title": "Тип Jira",
+      "default": "cloud",
+      "options": [
+        "cloud|Jira Cloud (почта + API-токен)",
+        "server|Server / Data Center (личный токен)"
+      ]
+    },
+    {
+      "key": "email",
+      "type": "string",
+      "title": "Почта",
+      "placeholder": "you@company.com",
+      "help": "Только для Jira Cloud"
+    },
+    {
+      "key": "token",
+      "type": "secret",
+      "title": "API-токен",
+      "help": "Можно вставить прямо во вкладке. Хранится в связке ключей."
+    },
+    {
+      "key": "filters",
+      "type": "jql",
+      "title": "Дополнительные фильтры (JQL)",
+      "help": "По строке на фильтр: Название | JQL. Обычные фильтры настраиваются во вкладке.",
+      "placeholder": "Мои задачи | assignee = currentUser() AND resolution = Unresolved"
+    },
+    {
+      "key": "notify",
+      "type": "bool",
+      "title": "Уведомлять о новых задачах",
+      "default": true
+    },
+    {
+      "key": "notifyWatched",
+      "type": "bool",
+      "default": true,
+      "title": "Уведомлять об изменениях в наблюдаемых задачах",
+      "help": "Проверяется вместе с обновлением списка, не чаще раза в пару минут"
+    },
+    {
+      "key": "watchedIntervalMinutes",
+      "type": "number",
+      "default": 2,
+      "min": 1,
+      "max": 60,
+      "title": "Проверять наблюдаемые каждые (мин)"
+    },
+    {
+      "key": "refreshMinutes",
+      "type": "number",
+      "title": "Обновлять каждые (мин)",
+      "default": 5,
+      "min": 1,
+      "max": 60,
+      "help": "Список обновляется по таймеру и каждый раз, когда вы открываете панель"
+    }
+  ],
+  "refreshMinutes": 5,
+  "integrity": {
+    "plugin.js": "sha256-d1cf4edbd1cded0806cf90de8240fe6bb4b65652754c35fe5840e4691a2ae319"
+  }
+}

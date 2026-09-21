@@ -1,0 +1,56 @@
+name: Плагины
+
+# Ревью глазами не видит, совпадает ли хеш в записи с тем, что реально лежит по
+# ссылке, — а это единственный способ протащить чужой код мимо ревью. Поэтому
+# архивы скачиваются и сверяются здесь, на каждый pull request.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Манифесты плагинов в репозитории
+        run: python3 tools/fastplugin check
+
+      - name: Хеши скриптов совпадают со скриптами
+        run: python3 tools/fastplugin verify
+
+      - name: Индекс каталога разобран
+        run: python3 tools/fastplugin index check
+
+      - name: Архивы из индекса совпадают с записями
+        run: python3 tools/fastplugin index audit
+
+      - name: Каталог собран из индекса, а не правлен руками
+        run: |
+          python3 tools/fastplugin index page
+          if ! git diff --quiet docs/catalog.md; then
+            echo "✗ docs/catalog.md разошёлся с plugins.json."
+            echo "  Запустите: python3 tools/fastplugin index page"
+            git --no-pager diff docs/catalog.md
+            exit 1
+          fi
+
+      - name: Флаг official не выдаёт себя за наш
+        # official помечает плагины команды FastAction. В pull request со стороны
+        # его быть не должно — иначе чужой плагин встанет в раздел «от команды».
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          before=$(git show "origin/${{ github.base_ref }}:plugins.json" \
+            | python3 -c "import json,sys; print(sorted(p['id'] for p in json.load(sys.stdin)['plugins'] if p.get('official')))")
+          after=$(python3 -c "import json; print(sorted(p['id'] for p in json.load(open('plugins.json'))['plugins'] if p.get('official')))")
+          if [ "$before" != "$after" ]; then
+            echo "✗ Набор плагинов с official изменился в pull request со стороны."
+            echo "  было:  $before"
+            echo "  стало: $after"
+            exit 1
+          fi

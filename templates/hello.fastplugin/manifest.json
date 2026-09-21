@@ -1,0 +1,24 @@
+{
+  "id": "com.example.hello",
+  "name": "Hello",
+  "caption": "HELLO",
+  "icon": "hand.wave",
+  "summary": "Заготовка плагина: одна строка списка и кнопка. Замените на своё описание — его увидят в каталоге.",
+  "version": "0.1.0",
+  "author": "Ваше имя",
+  "apiVersion": 1,
+  "entry": "plugin.js",
+  "permissions": {
+    "clipboard": true
+  },
+  "settings": [
+    {
+      "key": "greeting",
+      "type": "string",
+      "title": "Что говорить",
+      "default": "Привет",
+      "placeholder": "Привет"
+    }
+  ],
+  "integrity": {}
+}

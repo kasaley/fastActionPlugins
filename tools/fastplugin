@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""Инструмент автора плагина FastAction.
+
+  tools/fastplugin new weather --title Погода   # заготовка плагина в plugins/
+  tools/fastplugin stamp                 # хеши скриптов → в манифесты
+  tools/fastplugin verify                # хеши на месте и совпадают?
+  tools/fastplugin check                 # манифесты разобраны и осмысленны
+  tools/fastplugin package jira          # build/jira.fastplugin.zip + sha256
+  tools/fastplugin entry jira <url>      # готовая запись для plugins.json
+  tools/fastplugin index check           # проверить plugins.json
+  tools/fastplugin index audit           # скачать архивы и сверить хеши
+  tools/fastplugin index page            # пересобрать docs/catalog.md
+  tools/fastplugin release jira          # тег и релиз GitHub для плагина
+
+Подписи у плагинов нет — доверие держится на двух хешах, и оба обязательны.
+
+  * sha256 каждого скрипта лежит в `integrity` манифеста. Приложение сверяет его
+    при каждом запуске, поэтому плагин, отредактированный после установки,
+    просто не запустится. Отсюда правило: поправил скрипт — `stamp`.
+  * sha256 всего архива лежит в записи каталога. Приложение считает его перед
+    установкой, поэтому подменить выложенный zip после ревью нельзя: пока запись
+    не обновится через pull request, приложение откажется ставить новый архив.
+
+Всё на голом Python 3, без зависимостей: автору плагина не нужно ставить ничего.
+"""
+import argparse
+import hashlib
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import zipfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+PLUGINS = ROOT / "plugins"
+BUILD = ROOT / "build"
+INDEX = ROOT / "plugins.json"
+PAGE = ROOT / "docs/catalog.md"
+TEMPLATE = ROOT / "templates/hello.fastplugin"
+
+API_VERSION = 1
+REPOSITORY = "https://github.com/kasaley/fastActionPlugins"
+CAPABILITIES = {"network", "secrets", "clipboard", "notifications", "openURL", "exec", "autofill"}
+# Единственная программа, которую приложение готово запустить по просьбе плагина,
+# и то по разрешению пользователя (PluginExecutables.known в приложении). Список
+# намеренно короткий: каждая новая программа — это новая поверхность атаки.
+EXEC_TOOLS = {"op"}
+# PluginSettingField.Kind в приложении. Держать в согласии: тип, которого здесь
+# нет, приложение не разберёт, и весь манифест окажется нечитаемым.
+SETTING_TYPES = {"string", "secret", "host", "bool", "number", "select", "jql"}
+
+
+def fail(message: str) -> None:
+    print(f"✗ {message}")
+    sys.exit(1)
+
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def plugin_path(name: str) -> pathlib.Path:
+    """«jira», «jira.fastplugin» и целый путь — всё это один и тот же плагин."""
+    candidate = pathlib.Path(name)
+    if candidate.is_dir():
+        return candidate.resolve()
+    stem = name if name.endswith(".fastplugin") else f"{name}.fastplugin"
+    path = PLUGINS / stem
+    if not path.is_dir():
+        fail(f"нет плагина {stem} в {PLUGINS}")
+    return path
+
+
+def every_plugin(names: list[str]) -> list[pathlib.Path]:
+    if names:
+        return [plugin_path(name) for name in names]
+    found = sorted(PLUGINS.glob("*.fastplugin"))
+    if not found:
+        fail(f"не найдено ни одного плагина в {PLUGINS}")
+    return found
+
+
+def read_manifest(directory: pathlib.Path) -> dict:
+    path = directory / "manifest.json"
+    if not path.exists():
+        fail(f"{directory.name}: нет manifest.json")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        fail(f"{directory.name}/manifest.json: {error}")
+        return {}
+
+
+def write_manifest(directory: pathlib.Path, manifest: dict) -> None:
+    (directory / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+# MARK: хеши скриптов
+
+
+def stamp(directory: pathlib.Path) -> None:
+    manifest = read_manifest(directory)
+    entry = manifest.get("entry", "plugin.js")
+    script = directory / entry
+    if not script.exists():
+        fail(f"{directory.name}: нет {entry}")
+    value = digest(script.read_bytes())
+    manifest["integrity"] = {entry: f"sha256-{value}"}
+    write_manifest(directory, manifest)
+    print(f"  {directory.name}: {entry} → sha256-{value[:16]}…")
+
+
+def verify(directory: pathlib.Path) -> bool:
+    manifest = read_manifest(directory)
+    entry = manifest.get("entry", "plugin.js")
+    script = directory / entry
+    if not script.exists():
+        print(f"✗ {directory.name}: нет {entry}")
+        return False
+    expected = str(manifest.get("integrity", {}).get(entry, "")).replace("sha256-", "")
+    actual = digest(script.read_bytes())
+    if not expected:
+        print(f"✗ {directory.name}: в манифесте нет хеша для {entry} — запустите stamp")
+        return False
+    if expected != actual:
+        print(f"✗ {directory.name}: хеш устарел — запустите stamp")
+        return False
+    print(f"  {directory.name}: хеш совпадает")
+    return True
+
+
+# MARK: манифест
+
+
+def check_manifest(directory: pathlib.Path) -> list[str]:
+    """Всё, что приложение проверит само, — но здесь и сразу, с понятным текстом."""
+    manifest = read_manifest(directory)
+    problems = []
+    name = directory.name
+
+    if not re.fullmatch(r"[A-Za-z0-9.\-]+", str(manifest.get("id", ""))):
+        problems.append(f"{name}: id только из букв, цифр, точки и дефиса")
+    for field in ("id", "name", "icon", "version", "author"):
+        if not manifest.get(field):
+            problems.append(f"{name}: нет поля {field}")
+    if not re.fullmatch(r"\d+(\.\d+)*", str(manifest.get("version", ""))):
+        problems.append(f"{name}: version вида 1.2.3 — по ней приложение понимает, что вышло новое")
+    if manifest.get("apiVersion", 1) > API_VERSION:
+        problems.append(f"{name}: apiVersion новее, чем понимает приложение ({API_VERSION})")
+    if len(str(manifest.get("summary", ""))) > 300:
+        problems.append(f"{name}: summary длиннее 300 символов")
+
+    entry = manifest.get("entry", "plugin.js")
+    if not (directory / entry).exists():
+        problems.append(f"{name}: нет файла {entry}")
+
+    permissions = manifest.get("permissions", {})
+    if not isinstance(permissions, dict):
+        problems.append(f"{name}: permissions должен быть объектом")
+        permissions = {}
+    for key in set(permissions) - CAPABILITIES:
+        problems.append(f"{name}: неизвестное разрешение {key}")
+    for host in permissions.get("network", []) or []:
+        # `$setting:key` — адрес, который пользователь вводит сам в настройках плагина.
+        if str(host).startswith("$setting:"):
+            key = str(host).split(":", 1)[1]
+            if not any(field.get("key") == key for field in manifest.get("settings", [])):
+                problems.append(f"{name}: network ссылается на настройку {key}, которой нет")
+        elif not re.fullmatch(r"[a-z0-9.\-]+", str(host).lower()):
+            problems.append(f"{name}: {host} не похож на имя хоста")
+    for tool in permissions.get("exec", []) or []:
+        binary = (tool or {}).get("tool", "")
+        if binary not in EXEC_TOOLS:
+            problems.append(
+                f"{name}: приложение умеет запускать только {', '.join(sorted(EXEC_TOOLS))}, а не {binary} — "
+                "такой плагин не заработает"
+            )
+        if not (tool or {}).get("reason"):
+            problems.append(f"{name}: для exec {binary} нужна reason — её видит пользователь")
+
+    keys = set()
+    for field in manifest.get("settings", []) or []:
+        key = field.get("key", "")
+        if not key:
+            problems.append(f"{name}: у настройки нет key")
+        if key in keys:
+            problems.append(f"{name}: настройка {key} объявлена дважды")
+        keys.add(key)
+        if field.get("type") not in SETTING_TYPES:
+            problems.append(f"{name}: у настройки {key} тип {field.get('type')}, а бывают {', '.join(sorted(SETTING_TYPES))}")
+    return problems
+
+
+# MARK: сборка
+
+
+def package(directory: pathlib.Path) -> pathlib.Path:
+    if not verify(directory):
+        fail("сначала stamp: в архив не должен попасть скрипт с устаревшим хешем")
+    BUILD.mkdir(exist_ok=True)
+    archive = BUILD / f"{directory.name}.zip"
+    if archive.exists():
+        archive.unlink()
+    # Архив как его соберёт ditto: папка плагина целиком, внутри — её имя.
+    if shutil.which("ditto"):
+        subprocess.run(["ditto", "-c", "-k", "--keepParent", str(directory), str(archive)], check=True)
+    else:
+        zip_folder(directory, archive)
+    value = digest(archive.read_bytes())
+    print(f"  {archive.relative_to(ROOT)}")
+    print(f"  sha256: {value}")
+    return archive
+
+
+def zip_folder(directory: pathlib.Path, archive: pathlib.Path) -> None:
+    """Запасной путь для не-macOS: тот же состав, что даёт ditto."""
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
+        for path in sorted(directory.rglob("*")):
+            if path.is_file():
+                zipped.write(path, f"{directory.name}/{path.relative_to(directory)}")
+
+
+def entry_for(directory: pathlib.Path, url: str) -> dict:
+    manifest = read_manifest(directory)
+    archive = BUILD / f"{directory.name}.zip"
+    if not archive.exists():
+        archive = package(directory)
+    permissions = manifest.get("permissions", {})
+    asked = sorted(key for key, value in permissions.items() if value)
+    hosts = [str(host) for host in permissions.get("network", []) or []]
+    return {
+        "id": manifest["id"],
+        "name": manifest["name"],
+        "icon": manifest.get("icon", "puzzlepiece.extension"),
+        "author": manifest.get("author", ""),
+        "description": manifest.get("summary", ""),
+        "repository": REPOSITORY,
+        "url": url,
+        "sha256": digest(archive.read_bytes()),
+        "version": manifest.get("version", "1.0"),
+        "apiVersion": manifest.get("apiVersion", 1),
+        "permissions": asked,
+        "hosts": hosts,
+    }
+
+
+# MARK: индекс
+
+
+def load_index() -> dict:
+    return json.loads(INDEX.read_text(encoding="utf-8"))
+
+
+def save_index(data: dict) -> None:
+    INDEX.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def index_check() -> int:
+    data = load_index()
+    problems = []
+    if data.get("schema") != 1:
+        problems.append("schema должен быть 1")
+    seen = set()
+    for record in data.get("plugins", []):
+        name = record.get("id", "<без id>")
+        if not re.fullmatch(r"[a-z0-9.\-]+", record.get("id", "")):
+            problems.append(f"{name}: id только из строчных букв, цифр, точки и дефиса")
+        if record.get("id") in seen:
+            problems.append(f"{name}: повторяющийся id")
+        seen.add(record.get("id"))
+        for field in ("name", "author", "description", "url", "sha256", "version", "repository"):
+            if not record.get(field):
+                problems.append(f"{name}: нет поля {field}")
+        for field in ("url", "repository"):
+            value = record.get(field, "")
+            if value and not value.startswith("https://"):
+                problems.append(f"{name}: {field} должен быть https")
+        if not re.fullmatch(r"[0-9a-f]{64}", record.get("sha256", "")):
+            problems.append(f"{name}: sha256 должен быть 64 шестнадцатеричных символа")
+        # Плавающая ссылка разойдётся с хешем на следующем же релизе автора.
+        if "/releases/latest/" in record.get("url", ""):
+            problems.append(f"{name}: ссылка должна вести на конкретный релиз, а не на latest")
+        if record.get("apiVersion", 1) > API_VERSION:
+            problems.append(f"{name}: apiVersion новее, чем понимает приложение")
+        unknown = set(record.get("permissions", [])) - CAPABILITIES
+        if unknown:
+            problems.append(f"{name}: неизвестные разрешения: {', '.join(sorted(unknown))}")
+        if len(record.get("description", "")) > 300:
+            problems.append(f"{name}: описание длиннее 300 символов")
+
+    for problem in problems:
+        print("✗", problem)
+    print(f"{len(data.get('plugins', []))} плагинов, {len(problems)} проблем")
+    return 1 if problems else 0
+
+
+def index_audit() -> int:
+    """Скачивает каждый архив и сверяет хеш — то, чего не видно глазами на ревью.
+
+    Заявить в записи один хеш, а выложить другой архив — единственный способ
+    протащить чужой код мимо ревью, и это единственная проверка, которая его ловит.
+    """
+    data = load_index()
+    problems = 0
+    for record in data.get("plugins", []):
+        name = record.get("id", "<без id>")
+        url = record.get("url", "")
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                if response.status != 200:
+                    print(f"✗ {name}: архив отвечает {response.status}")
+                    problems += 1
+                    continue
+                body = response.read(32 * 1024 * 1024)
+        except (urllib.error.URLError, ValueError) as error:
+            print(f"✗ {name}: архив не скачивается — {error}")
+            problems += 1
+            continue
+        actual = digest(body)
+        if actual != record.get("sha256"):
+            print(f"✗ {name}: хеш архива не совпадает с записью")
+            print(f"    в записи: {record.get('sha256')}")
+            print(f"    у архива: {actual}")
+            problems += 1
+            continue
+        inside = inspect_archive(name, body)
+        problems += len(inside)
+        for problem in inside:
+            print("✗", problem)
+        if not inside:
+            print(f"  {name}: архив совпадает с записью")
+    print(f"проверено архивов: {len(data.get('plugins', []))}, проблем: {problems}")
+    return 1 if problems else 0
+
+
+def inspect_archive(name: str, body: bytes) -> list[str]:
+    """Внутри архива должен лежать ровно тот плагин, который описан в записи."""
+    problems = []
+    scratch = BUILD / "audit"
+    shutil.rmtree(scratch, ignore_errors=True)
+    scratch.mkdir(parents=True)
+    path = scratch / "archive.zip"
+    path.write_bytes(body)
+    try:
+        with zipfile.ZipFile(path) as zipped:
+            for member in zipped.namelist():
+                if member.startswith("/") or ".." in pathlib.PurePosixPath(member).parts:
+                    return [f"{name}: в архиве путь наружу — {member}"]
+            zipped.extractall(scratch)
+    except zipfile.BadZipFile:
+        return [f"{name}: архив не читается как zip"]
+    folders = [item for item in scratch.iterdir() if item.is_dir() and item.suffix == ".fastplugin"]
+    if len(folders) != 1:
+        return [f"{name}: в архиве должна быть ровно одна папка .fastplugin"]
+    problems += check_manifest(folders[0])
+    if not verify(folders[0]):
+        problems.append(f"{name}: хеш скрипта в манифесте не совпадает со скриптом")
+    manifest = read_manifest(folders[0])
+    if manifest.get("id") != name:
+        problems.append(f"{name}: в архиве плагин с другим id — {manifest.get('id')}")
+    return problems
+
+
+def index_page() -> int:
+    data = load_index()
+
+    def block(record):
+        lines = [f"### [{record['name']}]({record['repository']})", "", record["description"], ""]
+        lines.append(f"- Автор: {record['author']}")
+        lines.append(f"- Версия: {record.get('version', '1.0')}")
+        asked = ", ".join(record.get("permissions", [])) or "ничего не просит"
+        lines.append(f"- Просит: {asked}")
+        hosts = record.get("hosts", [])
+        if hosts:
+            readable = ", ".join("адрес из настроек плагина" if host.startswith("$setting:") else host for host in hosts)
+            lines.append(f"- Обращается к: {readable}")
+        return "\n".join(lines)
+
+    ours = [record for record in data["plugins"] if record.get("official")]
+    theirs = [record for record in data["plugins"] if not record.get("official")]
+    text = PAGE.read_text(encoding="utf-8") if PAGE.exists() else ""
+    head = text.split("<!-- список -->")[0] if "<!-- список -->" in text else ""
+    if not head:
+        fail("в docs/catalog.md нет метки <!-- список -->")
+    parts = [head.rstrip(), "", "<!-- список -->", ""]
+    parts.append("<!-- Этот раздел собирается из plugins.json: tools/fastplugin index page -->")
+    parts += ["", "## От команды FastAction", ""]
+    parts += [block(record) for record in ours] or ["Пока ничего."]
+    parts += ["", "## От сообщества", ""]
+    parts += [block(record) for record in theirs] or [
+        "Пока ничего. Ваш плагин может быть первым — как прислать, написано ниже."
+    ]
+    tail = text.split("<!-- /список -->")[1] if "<!-- /список -->" in text else ""
+    parts += ["", "<!-- /список -->", tail.lstrip()]
+    PAGE.write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
+    print(f"  {PAGE.relative_to(ROOT)} собран из {len(data['plugins'])} записей")
+    return 0
+
+
+# MARK: заготовка
+
+
+def scaffold(name: str, title: str | None) -> int:
+    """`name` — имя папки, только латиницей: оно же идёт в id и в имя архива.
+    Человеческое имя может быть любым и задаётся флагом --title."""
+    slug = re.sub(r"[^a-z0-9\-]", "", name.lower().replace(" ", "-"))
+    if not slug:
+        fail("имя папки задаётся латиницей, например «weather»; "
+             "как плагин назвать для людей — флаг --title «Погода»")
+    shown = title or name
+    target = PLUGINS / f"{slug}.fastplugin"
+    if target.exists():
+        fail(f"{target.name} уже есть")
+    if not TEMPLATE.exists():
+        fail(f"нет заготовки в {TEMPLATE}")
+    shutil.copytree(TEMPLATE, target)
+    manifest = read_manifest(target)
+    manifest["id"] = f"com.example.{slug}"
+    manifest["name"] = shown
+    manifest["caption"] = shown.upper()
+    write_manifest(target, manifest)
+    stamp(target)
+    print(f"\nГотово: {target.relative_to(ROOT)}")
+    print("Дальше:")
+    print(f"  1. поправьте id и author в {target.name}/manifest.json — id должен быть вашим")
+    print(f"  2. напишите {target.name}/plugin.js")
+    print("  3. tools/fastplugin stamp  — после каждой правки скрипта")
+    print("  4. поставьте его у себя: Настройки → Плагины → Установить плагин…")
+    return 0
+
+
+# MARK: релиз
+
+
+def release(name: str) -> int:
+    """Тег и релиз GitHub для одного плагина: у каждого свой цикл версий."""
+    directory = plugin_path(name)
+    manifest = read_manifest(directory)
+    version = manifest["version"]
+    short = directory.name.replace(".fastplugin", "")
+    tag = f"{short}-{version}"
+    problems = check_manifest(directory)
+    for problem in problems:
+        print("✗", problem)
+    if problems:
+        fail("манифест не в порядке")
+    stamp(directory)
+    archive = package(directory)
+
+    if subprocess.run(["gh", "release", "view", tag], capture_output=True).returncode == 0:
+        fail(f"релиз {tag} уже есть — поднимите version в манифесте")
+    subprocess.run(
+        ["gh", "release", "create", tag, str(archive),
+         "--title", f"{manifest['name']} {version}",
+         "--notes", f"Плагин {manifest['name']} версии {version} для FastAction."],
+        check=True,
+    )
+    url = f"{REPOSITORY}/releases/download/{tag}/{archive.name}"
+    print(f"\n  выложено: {url}")
+
+    data = load_index()
+    record = entry_for(directory, url)
+    for existing in data["plugins"]:
+        if existing["id"] == record["id"]:
+            existing.update({key: record[key] for key in ("url", "sha256", "version", "permissions", "hosts")})
+            break
+    else:
+        record["official"] = True
+        data["plugins"].append(record)
+    save_index(data)
+    print("  запись в plugins.json обновлена")
+    return index_check() or index_page()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    made = commands.add_parser("new", help="заготовка нового плагина")
+    made.add_argument("name", help="имя папки латиницей, например weather")
+    made.add_argument("--title", help="как плагин называется для людей, например «Погода»")
+
+    for word, help_text in [("stamp", "проставить хеши скриптов"), ("verify", "сверить хеши"),
+                            ("check", "проверить манифесты")]:
+        sub = commands.add_parser(word, help=help_text)
+        sub.add_argument("plugins", nargs="*")
+
+    built = commands.add_parser("package", help="собрать архив и посчитать sha256")
+    built.add_argument("plugin")
+
+    written = commands.add_parser("entry", help="готовая запись для plugins.json")
+    written.add_argument("plugin")
+    written.add_argument("url")
+
+    catalog = commands.add_parser("index", help="работа с plugins.json")
+    catalog.add_argument("action", choices=["check", "audit", "page"])
+
+    published = commands.add_parser("release", help="тег и релиз GitHub для плагина")
+    published.add_argument("plugin")
+
+    arguments = parser.parse_args()
+
+    if arguments.command == "new":
+        sys.exit(scaffold(arguments.name, arguments.title))
+    if arguments.command == "stamp":
+        for directory in every_plugin(arguments.plugins):
+            stamp(directory)
+        sys.exit(0)
+    if arguments.command == "verify":
+        sys.exit(0 if all(verify(directory) for directory in every_plugin(arguments.plugins)) else 1)
+    if arguments.command == "check":
+        problems = []
+        for directory in every_plugin(arguments.plugins):
+            found = check_manifest(directory)
+            problems += found
+            if not found:
+                print(f"  {directory.name}: манифест в порядке")
+        for problem in problems:
+            print("✗", problem)
+        print(f"проблем: {len(problems)}")
+        sys.exit(1 if problems else 0)
+    if arguments.command == "package":
+        package(plugin_path(arguments.plugin))
+        sys.exit(0)
+    if arguments.command == "entry":
+        print(json.dumps(entry_for(plugin_path(arguments.plugin), arguments.url), ensure_ascii=False, indent=2))
+        sys.exit(0)
+    if arguments.command == "index":
+        sys.exit({"check": index_check, "audit": index_audit, "page": index_page}[arguments.action]())
+    if arguments.command == "release":
+        sys.exit(release(arguments.plugin))
+
+
+if __name__ == "__main__":
+    main()

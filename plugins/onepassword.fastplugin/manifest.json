@@ -1,0 +1,59 @@
+{
+  "id": "com.fastaction.onepassword",
+  "name": "1Password",
+  "caption": "1PASSWORD",
+  "icon": "key.fill",
+  "summary": "Часто используемые записи 1Password: поля, копирование и автозаполнение через официальный op.",
+  "version": "1.0.0",
+  "author": "FastAction",
+  "apiVersion": 1,
+  "entry": "plugin.js",
+  "permissions": {
+    "clipboard": true,
+    "openURL": true,
+    "autofill": true,
+    "exec": [
+      {
+        "tool": "op",
+        "reason": "Читать записи через официальный 1Password CLI"
+      }
+    ]
+  },
+  "settings": [
+    {
+      "key": "category",
+      "type": "select",
+      "title": "Что показывать",
+      "default": "Login",
+      "options": [
+        "Login|Логины",
+        "all|Все записи"
+      ]
+    },
+    {
+      "key": "vault",
+      "type": "string",
+      "title": "Сейф",
+      "placeholder": "все сейфы",
+      "help": "Ограничить одним сейфом"
+    },
+    {
+      "key": "clearAfter",
+      "type": "number",
+      "title": "Очищать буфер через (сек)",
+      "default": 45,
+      "min": 10,
+      "max": 300
+    },
+    {
+      "key": "autofill",
+      "type": "bool",
+      "title": "Разрешить автозаполнение",
+      "default": true,
+      "help": "Ввод логина и пароля в активное приложение по кнопке"
+    }
+  ],
+  "integrity": {
+    "plugin.js": "sha256-fd02c6230d73eac7a638be60a5c6671ad2873b5cee4449c2cd6e15e07dbc43ee"
+  }
+}
