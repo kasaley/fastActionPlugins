@@ -12,7 +12,7 @@
 
 ## От команды FastAction
 
-### [Jira](https://github.com/kasaley/fastActionPlugins)
+### [Jira](https://github.com/kasaley/FastActionJira)
 
 Задачи Jira по вашим фильтрам: статус и приоритет в строке, описание и комментарии в панели, центр уведомлений, переход в браузер и копирование номера или ссылки.
 
@@ -21,7 +21,7 @@
 - Просит: clipboard, network, notifications, openURL, secrets
 - Обращается к: адрес из настроек плагина
 
-### [1Password](https://github.com/kasaley/fastActionPlugins)
+### [1Password](https://github.com/kasaley/FastAction1Password)
 
 Часто используемые записи 1Password: поля, копирование и автозаполнение через официальный op.
 

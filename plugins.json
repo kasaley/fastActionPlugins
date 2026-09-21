@@ -7,9 +7,9 @@
       "icon": "checklist",
       "author": "FastAction",
       "description": "Задачи Jira по вашим фильтрам: статус и приоритет в строке, описание и комментарии в панели, центр уведомлений, переход в браузер и копирование номера или ссылки.",
-      "repository": "https://github.com/kasaley/fastActionPlugins",
-      "url": "https://github.com/kasaley/fastActionPlugins/releases/download/jira-1.4.0/jira.fastplugin.zip",
-      "sha256": "69f6b37a35b6f36f8dc7b84f809740df992dfd68f70cc990cecef2ce0baa494e",
+      "repository": "https://github.com/kasaley/FastActionJira",
+      "url": "https://github.com/kasaley/FastActionJira/releases/download/v1.4.0/jira.fastplugin.zip",
+      "sha256": "df39b580bd9ceabde43cbfddd4ed1b2a36fe2839db105f450b7c229f25611e0f",
       "version": "1.4.0",
       "apiVersion": 1,
       "permissions": [
@@ -22,7 +22,8 @@
       "hosts": [
         "$setting:site"
       ],
-      "official": true
+      "official": true,
+      "descriptionEn": "Jira issues by your own filters: status and priority in the row, description and comments in the panel, a feed of what changed, opening in the browser and copying a key or link."
     },
     {
       "id": "com.fastaction.onepassword",
@@ -30,9 +31,9 @@
       "icon": "key.fill",
       "author": "FastAction",
       "description": "Часто используемые записи 1Password: поля, копирование и автозаполнение через официальный op.",
-      "repository": "https://github.com/kasaley/fastActionPlugins",
-      "url": "https://github.com/kasaley/fastActionPlugins/releases/download/onepassword-1.0.0/onepassword.fastplugin.zip",
-      "sha256": "b2ccb4b8b6d40c746ae8681a0b5880d8d37625cf29eaa83398f2b1fb81b2af0c",
+      "repository": "https://github.com/kasaley/FastAction1Password",
+      "url": "https://github.com/kasaley/FastAction1Password/releases/download/v1.0.0/onepassword.fastplugin.zip",
+      "sha256": "8116a0109c4a431a1151503725b742d8a6be0156070d7d1a60d5dd80618aa7d3",
       "version": "1.0.0",
       "apiVersion": 1,
       "permissions": [
@@ -42,7 +43,8 @@
         "openURL"
       ],
       "hosts": [],
-      "official": true
+      "official": true,
+      "descriptionEn": "The 1Password items you reach for most: fields, one-click copying and filling through the official op CLI."
     }
   ]
 }

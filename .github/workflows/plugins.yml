@@ -17,12 +17,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Манифесты плагинов в репозитории
-        run: python3 tools/fastplugin check
-
-      - name: Хеши скриптов совпадают со скриптами
-        run: python3 tools/fastplugin verify
-
       - name: Индекс каталога разобран
         run: python3 tools/fastplugin index check
 
@@ -32,10 +26,10 @@ jobs:
       - name: Каталог собран из индекса, а не правлен руками
         run: |
           python3 tools/fastplugin index page
-          if ! git diff --quiet docs/catalog.md; then
-            echo "✗ docs/catalog.md разошёлся с plugins.json."
+          if ! git diff --quiet docs/catalog.md docs/catalog.en.md; then
+            echo "✗ Каталог разошёлся с plugins.json."
             echo "  Запустите: python3 tools/fastplugin index page"
-            git --no-pager diff docs/catalog.md
+            git --no-pager diff docs/catalog.md docs/catalog.en.md
             exit 1
           fi
 
