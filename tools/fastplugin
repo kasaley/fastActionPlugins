@@ -311,14 +311,8 @@ def index_audit() -> int:
     for record in data.get("plugins", []):
         name = record.get("id", "<без id>")
         url = record.get("url", "")
-        try:
-            with urllib.request.urlopen(url, timeout=60) as response:
-                if response.status != 200:
-                    print(f"✗ {name}: архив отвечает {response.status}")
-                    problems += 1
-                    continue
-                body = response.read(32 * 1024 * 1024)
-        except (urllib.error.URLError, ValueError) as error:
+        body, error = download(url)
+        if body is None:
             print(f"✗ {name}: архив не скачивается — {error}")
             problems += 1
             continue
@@ -337,6 +331,27 @@ def index_audit() -> int:
             print(f"  {name}: архив совпадает с записью")
     print(f"проверено архивов: {len(data.get('plugins', []))}, проблем: {problems}")
     return 1 if problems else 0
+
+
+def download(url: str) -> tuple[bytes | None, str]:
+    """Качает архив. Сначала curl: у Python, поставленного с python.org, часто нет
+    корневых сертификатов, и автор на обычном маке упирался бы в невнятную ошибку
+    TLS вместо ответа про свой плагин."""
+    if shutil.which("curl"):
+        done = subprocess.run(
+            ["curl", "-fsSL", "--max-time", "120", "--max-filesize", str(32 * 1024 * 1024), url],
+            capture_output=True,
+        )
+        if done.returncode == 0:
+            return done.stdout, ""
+        return None, done.stderr.decode(errors="replace").strip() or f"curl вернул {done.returncode}"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            if response.status != 200:
+                return None, f"ответ {response.status}"
+            return response.read(32 * 1024 * 1024), ""
+    except (urllib.error.URLError, ValueError) as error:
+        return None, str(error)
 
 
 def inspect_archive(name: str, body: bytes) -> list[str]:
@@ -391,11 +406,10 @@ def index_page() -> int:
     parts = [head.rstrip(), "", "<!-- список -->", ""]
     parts.append("<!-- Этот раздел собирается из plugins.json: tools/fastplugin index page -->")
     parts += ["", "## От команды FastAction", ""]
-    parts += [block(record) for record in ours] or ["Пока ничего."]
+    parts.append("\n\n".join(block(record) for record in ours) if ours else "Пока ничего.")
     parts += ["", "## От сообщества", ""]
-    parts += [block(record) for record in theirs] or [
-        "Пока ничего. Ваш плагин может быть первым — как прислать, написано ниже."
-    ]
+    parts.append("\n\n".join(block(record) for record in theirs) if theirs
+                 else "Пока ничего. Ваш плагин может быть первым — как прислать, написано ниже.")
     tail = text.split("<!-- /список -->")[1] if "<!-- /список -->" in text else ""
     parts += ["", "<!-- /список -->", tail.lstrip()]
     PAGE.write_text("\n".join(parts).rstrip() + "\n", encoding="utf-8")
