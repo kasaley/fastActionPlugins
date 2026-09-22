@@ -19,7 +19,7 @@ Descriptions are the authors' own, as written.
 Jira issues by your own filters: status and priority in the row, description and comments in the panel, a feed of what changed, opening in the browser and copying a key or link.
 
 - Author: FastAction
-- Version: 1.4.0
+- Version: 1.5.0
 - Asks for: clipboard, network, notifications, openURL, secrets
 - Talks to: the address from the plugin's own settings
 
