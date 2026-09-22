@@ -8,9 +8,9 @@
       "author": "FastAction",
       "description": "Задачи Jira по вашим фильтрам: статус и приоритет в строке, описание и комментарии в панели, центр уведомлений, переход в браузер и копирование номера или ссылки.",
       "repository": "https://github.com/kasaley/FastActionJira",
-      "url": "https://github.com/kasaley/FastActionJira/releases/download/v1.5.0/jira.fastplugin.zip",
-      "sha256": "4786d4d24bac2b3b628cd32ec200fc718f8215317fa4b35b407685aae795d8e8",
-      "version": "1.5.0",
+      "url": "https://github.com/kasaley/FastActionJira/releases/download/v1.5.1/jira.fastplugin.zip",
+      "sha256": "bd2b813e9286903a57859e88960e9a7f63d35ae321f5d9386a8c30cda473f865",
+      "version": "1.5.1",
       "apiVersion": 1,
       "permissions": [
         "clipboard",
